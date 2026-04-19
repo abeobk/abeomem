@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "abeomem"
+version = "0.1.0"
+description = "Local MCP server for tips, tricks, and bug fixes Claude Code already paid for once."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "abeo" }]
+dependencies = [
+    "fastmcp>=2.0",
+    "rapidfuzz>=3.0",
+    "watchdog>=4.0",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+abeomem = "abeomem.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["abeomem"]
+
+[tool.hatch.build]
+include = ["abeomem/**/*.py", "abeomem/migrations/*.sql"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
