@@ -7,9 +7,18 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from importlib import resources
 from pathlib import Path
 
 BANNED_MIGRATION_KEYWORDS = ("VACUUM", "REINDEX", "PRAGMA", "ATTACH", "DETACH")
+
+
+def packaged_migrations_dir() -> Path:
+    """Return the filesystem path to the abeomem.migrations package directory.
+
+    Uses importlib.resources so it works both in editable installs and wheels.
+    """
+    return Path(str(resources.files("abeomem.migrations")))
 
 
 class MigrationError(Exception):
