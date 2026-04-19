@@ -23,6 +23,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from abeomem.backup import startup_backup_if_due
 from abeomem.config import Config, load_config
 from abeomem.db import get_connection, packaged_migrations_dir, run_migrations
 from abeomem.mirror.reconcile import reconcile
@@ -60,6 +61,15 @@ def bootstrap(config: Config | None = None) -> ServerContext:
     conn = get_connection(cfg.db.path)
     try:
         run_migrations(conn, packaged_migrations_dir())
+    finally:
+        conn.close()
+
+    # §1.6 strict order: backup runs AFTER migrations and BEFORE reconcile.
+    # Uses a dedicated connection internally.
+    startup_backup_if_due(cfg.db.path, cfg)
+
+    conn = get_connection(cfg.db.path)
+    try:
         reconcile(conn, cfg.memos.dir)
     finally:
         conn.close()
