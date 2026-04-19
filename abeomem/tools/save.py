@@ -1,7 +1,6 @@
 """memory_save tool (design.md §1.3.4).
 
-T4.1 minimal implementation: no supersede, no dedup. T4.4 will add supersede
-CAS; T4.5 will add dedup via RapidFuzz and hash short-circuit.
+Covers: T4.1 core insert, T4.4 supersede CAS. T4.5 will add dedup.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from typing import Any
 
 from abeomem.events import write_event
 from abeomem.hashing import MemoFields, content_hash
-from abeomem.tools import KIND_REQUIRED, VALID_KINDS, _nonempty, invalid
+from abeomem.tools import KIND_REQUIRED, VALID_KINDS, _nonempty, error, invalid
 from abeomem.topics import normalize_topics
 
 
@@ -30,6 +29,20 @@ def _validate_save_input(data: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _current_tip(conn: sqlite3.Connection, start_id: int, *, limit: int = 100) -> int:
+    """Walk superseded_by chain to the current tip. CAS guarantees no cycles,
+    but bound the walk anyway."""
+    curr = start_id
+    for _ in range(limit):
+        row = conn.execute(
+            "SELECT superseded_by FROM memo WHERE id = ?", (curr,)
+        ).fetchone()
+        if row is None or row["superseded_by"] is None:
+            return curr
+        curr = row["superseded_by"]
+    raise RuntimeError(f"supersede chain from {start_id} exceeded {limit} hops")
+
+
 def memory_save(
     conn: sqlite3.Connection,
     *,
@@ -38,10 +51,35 @@ def memory_save(
     data: dict[str, Any],
     source: str = "tool",
 ) -> dict[str, Any]:
-    """Save a new memo and emit a save event. Returns {id, status}."""
+    """Save a new memo. If data['supersedes'] is set, link the new row as the
+    successor atomically via CAS (§1.3.4).
+
+    Returns {id, status='created', supersedes?: int} or an error dict.
+    """
     err = _validate_save_input(data)
     if err is not None:
         return err
+
+    supersedes = data.get("supersedes")
+    if supersedes is not None and not isinstance(supersedes, int):
+        return invalid("supersedes", "must be int if present")
+
+    # Pre-check supersede target outside the write transaction (fast fail)
+    if supersedes is not None:
+        target = conn.execute(
+            "SELECT id, superseded_by, archived_at FROM memo WHERE id = ?",
+            (supersedes,),
+        ).fetchone()
+        if target is None:
+            return error("not_found", f"memo {supersedes} does not exist",
+                         {"id": supersedes})
+        if target["superseded_by"] is not None or target["archived_at"] is not None:
+            tip = _current_tip(conn, supersedes)
+            return error(
+                "superseded_target",
+                f"memo {supersedes} is not a tip; current tip is {tip}",
+                {"tip_id": tip},
+            )
 
     kind = data["kind"]
     title = data["title"].strip()
@@ -49,16 +87,11 @@ def memory_save(
     tags = list(data.get("tags") or [])
 
     fields = MemoFields(
-        kind=kind,
-        title=title,
-        symptom=data.get("symptom"),
-        cause=data.get("cause"),
-        solution=data.get("solution"),
-        rule=data.get("rule"),
-        rationale=data.get("rationale"),
-        notes=data.get("notes"),
-        topics=topics,
-        tags=tags,
+        kind=kind, title=title,
+        symptom=data.get("symptom"), cause=data.get("cause"),
+        solution=data.get("solution"), rule=data.get("rule"),
+        rationale=data.get("rationale"), notes=data.get("notes"),
+        topics=topics, tags=tags,
     )
     ch = content_hash(fields)
 
@@ -78,13 +111,34 @@ def memory_save(
             ),
         )
         new_id = cur.lastrowid
+
+        if supersedes is not None:
+            cur = conn.execute(
+                "UPDATE memo SET superseded_by = ? "
+                "WHERE id = ? AND superseded_by IS NULL AND archived_at IS NULL",
+                (new_id, supersedes),
+            )
+            if cur.rowcount != 1:
+                # Concurrent save raced us — rollback and report current tip
+                conn.execute("ROLLBACK")
+                tip = _current_tip(conn, supersedes)
+                return error(
+                    "superseded_target",
+                    f"memo {supersedes} was superseded by a concurrent save; "
+                    f"current tip is {tip}",
+                    {"tip_id": tip},
+                )
+
+        payload: dict[str, Any] = {"status": "created", "source": source}
+        if supersedes is not None:
+            payload["supersedes"] = supersedes
         write_event(
             conn,
             action="save",
             session_id=session_id,
             memo_id=new_id,
             topics=topics,
-            payload={"status": "created", "source": source},
+            payload=payload,
         )
         conn.execute("COMMIT")
     except Exception:
@@ -92,4 +146,7 @@ def memory_save(
             conn.execute("ROLLBACK")
         raise
 
-    return {"id": new_id, "status": "created"}
+    result: dict[str, Any] = {"id": new_id, "status": "created"}
+    if supersedes is not None:
+        result["supersedes"] = supersedes
+    return result
