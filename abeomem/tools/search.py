@@ -1,12 +1,13 @@
 """memory_search tool (design.md §1.3.2, §1.4).
 
-T4.3 base implementation: BM25 with field weights + useful_count boost,
-scope + kind filters. T4.8 will layer topic boost and the _hint response
-field on top.
+BM25 with field weights × useful_count boost × topic overlap boost.
+`_hint` response field appears when results are non-empty and no useful
+event has fired in the current session.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 import time
@@ -14,6 +15,12 @@ from typing import Any
 
 from abeomem.events import write_event
 from abeomem.tools import VALID_KINDS, invalid
+from abeomem.topics import normalize_topics
+
+HINT_MESSAGE = (
+    "After solving the problem, ask the user if a memo above helped. "
+    "If yes, call memory_useful(id)."
+)
 
 
 def _escape_fts_query(q: str) -> str:
@@ -81,16 +88,12 @@ def memory_search(
         where_parts.append("memo.kind = ?")
         params.append(kind)
 
-    # FTS match clause
     match_expr = _escape_fts_query(query)
     where_parts.append("memo_fts MATCH ?")
     params.append(match_expr)
 
-    # BM25 returns a negative score (more negative = better). Negate so higher =
-    # better, then multiply by useful_count factor. Keep the raw BM25 for
-    # column-1 snippet generation.
     sql = f"""
-    SELECT memo.id, memo.kind, memo.title, memo.useful_count,
+    SELECT memo.id, memo.kind, memo.title, memo.useful_count, memo.topics,
            -bm25(memo_fts, 3, 2, 2, 2, 1) AS raw_score,
            snippet(memo_fts, 0, '', '', '…', 10) AS snippet_line
       FROM memo_fts
@@ -98,13 +101,20 @@ def memory_search(
      WHERE {' AND '.join(where_parts)}
     """
 
+    # Normalize query topics once for ranking.
+    q_topics = set(normalize_topics(topics or []))
+
     t0 = time.perf_counter()
     rows = list(conn.execute(sql, params))
     took_ms = int((time.perf_counter() - t0) * 1000)
 
-    # Apply useful_count boost in Python (cheaper than SQL for small k), sort, trim
     def boost(row: sqlite3.Row) -> float:
-        return float(row["raw_score"]) * (1.0 + math.log(1.0 + row["useful_count"]))
+        s = float(row["raw_score"]) * (1.0 + math.log(1.0 + row["useful_count"]))
+        if q_topics:
+            memo_topics = set(json.loads(row["topics"]) if row["topics"] else [])
+            overlap = len(q_topics & memo_topics) / len(q_topics)  # asymmetric: §1.4
+            s *= 1.0 + 0.5 * overlap
+        return s
 
     scored = sorted(rows, key=boost, reverse=True)[:k]
 
@@ -124,11 +134,23 @@ def memory_search(
         action="search",
         session_id=session_id,
         query=query,
-        topics=topics,
+        topics=list(q_topics) if q_topics else None,
         payload={"k": k, "returned": len(results), "took_ms": took_ms},
     )
 
     response: dict[str, Any] = {"results": results}
     if warning is not None:
         response["_warning"] = warning
+
+    # `_hint` appears iff results non-empty AND no useful event fired in this
+    # session. (§1.3.2)
+    if results:
+        useful_in_session = conn.execute(
+            "SELECT 1 FROM memo_event "
+            "WHERE session_id = ? AND action = 'useful' LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if useful_in_session is None:
+            response["_hint"] = HINT_MESSAGE
+
     return response
