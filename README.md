@@ -213,6 +213,30 @@ Loss of `memos/` is annoying (re-exported on next server startup). Loss of `kb.d
 
 ---
 
+## Backup & migration
+
+`abeomem backup` is the only correct way to snapshot a live DB. It runs `PRAGMA wal_checkpoint(TRUNCATE)` then `VACUUM INTO` on a dedicated connection — the result is a single self-contained, defragmented `.db` file with every WAL page merged in. A plain `cp kb.db` while the server is running can miss uncheckpointed pages and give you a corrupt snapshot.
+
+Backups also run automatically: on `serve` startup if the newest backup is older than `interval_days` (default 7), and on a background timer at the same interval. Last 8 backups are kept (`keep_count`).
+
+**Don't zip the whole `~/.abeomem/` dir.** `memos/` is regeneratable from the DB. `backups/` is redundant. Raw `kb.db` + `-wal` + `-shm` copied live can be inconsistent. Just back up the one VACUUMed `.db`.
+
+**Migrate to another machine:**
+
+```bash
+# On source
+abeomem backup --out /tmp/kb-migrate.db
+scp /tmp/kb-migrate.db new-host:~/
+
+# On target (after `pip install` + `abeomem init --global`)
+mv ~/kb-migrate.db ~/.abeomem/kb.db   # replaces the fresh empty DB
+abeomem sync                          # re-exports memos/ from the DB
+```
+
+If you customized `~/.config/abeomem/config.toml`, copy that too. Keep both machines on the same abeomem version so migrations don't diverge — if they do, the newer version will auto-upgrade the DB on first run; downgrade isn't supported.
+
+---
+
 ## Design invariants (don't violate)
 
 - The user is the rater for `memory_useful`. CC asks; user answers; CC relays.
