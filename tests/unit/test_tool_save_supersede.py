@@ -99,8 +99,10 @@ def test_supersede_race_only_one_wins(tmp_path):
             c.close()
 
     ts = [threading.Thread(target=worker, args=(t,)) for t in ("a", "b")]
-    for t in ts: t.start()
-    for t in ts: t.join()
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
 
     winners = [r for r in results if "error" not in r]
     losers = [r for r in results if "error" in r]

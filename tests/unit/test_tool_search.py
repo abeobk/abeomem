@@ -33,8 +33,8 @@ def test_basic_term_match(db):
 
 
 def test_useful_count_boost(db):
-    a = _save(db, title="pnpm a")
-    b = _save(db, title="pnpm b")
+    _save(db, title="pnpm alpha", symptom="unrelated one")
+    b = _save(db, title="pnpm beta", symptom="unrelated two")
     db.execute("UPDATE memo SET useful_count = 5 WHERE id = ?", (b["id"],))
     r = memory_search(db, session_id="s", server_scope="global", query="pnpm")
     # b ranks first despite being saved later (identical FTS, useful wins)
@@ -90,8 +90,12 @@ def test_scope_both_in_global_scope_degenerates(db):
 
 
 def test_k_limits_results(db):
-    for i in range(5):
-        _save(db, title=f"pnpm {i}")
+    # Titles + symptoms must differ enough to clear fuzzy-dedup (token_set ≥ 85)
+    topics = ["python", "nginx", "ssl", "docker", "redis"]
+    symptoms = ["alpha beta", "gamma delta", "epsilon zeta",
+                "eta theta", "iota kappa"]
+    for topic, sym in zip(topics, symptoms, strict=True):
+        _save(db, title=f"pnpm issue {topic}", symptom=sym)
     r = memory_search(
         db, session_id="s", server_scope="global", query="pnpm", k=3
     )

@@ -145,7 +145,10 @@ def test_concurrent_inserts_both_succeed(tmp_path):
 
     t1 = threading.Thread(target=worker, args=("a",))
     t2 = threading.Thread(target=worker, args=("b",))
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     assert not errors, f"unexpected errors: {errors}"
     assert len(results) == 2

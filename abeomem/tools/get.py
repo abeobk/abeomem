@@ -13,7 +13,6 @@ from typing import Any
 from abeomem.events import write_event
 from abeomem.tools import error
 
-
 _SELECT_COLS = (
     "id", "scope", "kind", "title",
     "symptom", "cause", "solution", "rule", "rationale", "notes",
