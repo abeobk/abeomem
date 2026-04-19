@@ -62,7 +62,9 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
-DEFAULT_CONFIG_PATH = _expand("~/.config/abeomem/config.toml")
+def default_config_path() -> Path:
+    """Computed on each call so HOME changes (tests) take effect."""
+    return _expand("~/.config/abeomem/config.toml")
 
 
 def _overlay(section_cls: type, data: dict) -> object:
@@ -86,7 +88,7 @@ def _overlay(section_cls: type, data: dict) -> object:
 def load_config(path: Path | None = None) -> Config:
     """Load a Config from `path` (default: ~/.config/abeomem/config.toml).
     Missing file → Config() with all defaults."""
-    p = path if path is not None else DEFAULT_CONFIG_PATH
+    p = path if path is not None else default_config_path()
     if not Path(p).exists():
         return Config()
     with open(p, "rb") as f:
